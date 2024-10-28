@@ -228,3 +228,127 @@ if __name__ == "__main__":
         cell_type="B",
         target_organism="m_musculus",
     )
+
+    # Create bipartite graph of types
+    print("Build bipartite graph")
+    source_organism = "h_sapiens"
+    target_organism = "m_musculus"
+    n_cell_types = 50
+    api = atlasapprox.API()
+    celltypexorgans = api.celltypexorgan(organism=source_organism)
+    source_types = (celltypexorgans > 0).sum(axis=1).nlargest(n_cell_types).index
+    results = []
+    for ct in source_types:
+        print(ct)
+        result = find_sister_type(
+            source_organism=source_organism,
+            cell_type=ct,
+            target_organism=target_organism,
+        )
+        results.append(result)
+
+    target_types = []
+    edges = []
+    for ct1, result in zip(source_types, results):
+        tmp = result["candidate_scores"]
+        tmp = tmp.loc[tmp["score"] > 1]
+        for j, (ct2, row) in enumerate(tmp.iterrows()):
+            if ct2 not in target_types:
+                target_types.append(ct2)
+            edges.append(
+                {
+                    "source": ct1,
+                    "target": ct2,
+                    "score": row["score"],
+                    "best_match": j == 0,
+                    "weight": 1.0 * row["score"] / tmp.iloc[0]["score"],
+                }
+            )
+    edges = pd.DataFrame(edges)
+
+    # Walk the bipartite to get optimal partnerings
+    edges_optimal = []
+    fwd_dic = {key: list(val.values) for key, val in edges.groupby("source").target}
+    while True:
+        found = False
+        for source, targets in fwd_dic.items():
+            if len(targets) == 1:
+                found = True
+                target = targets[0]
+                print("unique", source, target)
+                etmp = edges.groupby("source").get_group(source).iloc[0]
+                edges_optimal.append(
+                    {
+                        "source": source,
+                        "target": target,
+                        "best_match": True,
+                        "weight": etmp["weight"],
+                    }
+                )
+                fwd_dic.pop(source)
+                # exclude this target for anyone else, it's taken
+                for source2, targets2 in fwd_dic.items():
+                    # FIXME: need a better hack here
+                    if len(targets2) == 1:
+                        continue
+                    if target in targets2:
+                        fwd_dic[source2].remove(target)
+                break
+        if found:
+            continue
+        # end of obvious choices, take the closest matches now
+        for source, targets in fwd_dic.items():
+            found = True
+            target = targets[0]
+            print("closest", source, target)
+            etmp = edges.groupby("source").get_group(source).iloc[0]
+            best_match = etmp["target"] == target
+            edges_optimal.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "best_match": best_match,
+                    "weight": etmp["weight"],
+                }
+            )
+            fwd_dic.pop(source)
+            # exclude this target for anyone else, it's taken
+            for source2, targets2 in fwd_dic.items():
+                if target in targets2:
+                    fwd_dic[source2].remove(target)
+            break
+        if fwd_dic == {}:
+            break
+    edges_optimal = pd.DataFrame(edges_optimal)
+    edges_optimal["order"] = [
+        list(source_types).index(x) for x in edges_optimal["source"]
+    ]
+    edges_optimal = edges_optimal.sort_values("order")
+
+    target_types_optimal = edges_optimal["target"].drop_duplicates().values
+
+    fig, ax = plt.subplots()
+    ax.scatter([0] * len(source_types), np.arange(len(source_types)), color="k")
+    ax.scatter(
+        [1] * len(target_types_optimal), np.arange(len(target_types_optimal)), color="k"
+    )
+    for i, ct1 in enumerate(source_types):
+        ax.text(-0.1, i, ct1, ha="right", va="center")
+    for i, ct2 in enumerate(target_types_optimal):
+        ax.text(1.1, i, ct2, ha="left", va="center")
+    for _, edge in edges_optimal.iterrows():
+        ct1 = edge["source"]
+        ct2 = edge["target"]
+        i1 = list(source_types).index(ct1)
+        i2 = list(target_types_optimal).index(ct2)
+        ls = "-" if edge["best_match"] else "--"
+        lw = 3.0 * edge["weight"]
+        ax.plot([0, 1], [i1, i2], ls=ls, color="k", lw=lw, alpha=min(1.0, lw / 2.0))
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels([source_organism, target_organism])
+    ax.set_yticks([])
+    ax.set_ylim(max(len(target_types_optimal), len(source_types)) - 0.5, -0.5)
+    fig.tight_layout()
+
+    plt.ion()
+    plt.show()
