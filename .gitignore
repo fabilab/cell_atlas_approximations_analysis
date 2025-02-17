@@ -1,2 +1,8 @@
+# Virtual environment
 .venv
+
+# Data
 data/atlas_data
+
+# Figures
+figures
