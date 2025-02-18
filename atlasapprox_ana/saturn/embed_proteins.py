@@ -91,4 +91,7 @@ if __name__ == "__main__":
                         protein_tensor,
                         LogitsConfig(sequence=True, return_embeddings=True),
                     )
-                    torch.save(logits_output.embeddings, fn_out)
+                    # Compute mean of embeddings across sequence length
+                    # https://github.com/evolutionaryscale/esm/blob/main/cookbook/tutorials/2_embed.ipynb
+                    emb_mean = logits_output.embeddings.mean(axis=-2).squeeze()
+                    torch.save({"mean_representations": {-1: emb_mean}}, fn_out)
