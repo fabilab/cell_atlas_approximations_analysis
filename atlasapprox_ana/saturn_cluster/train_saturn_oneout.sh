@@ -4,8 +4,8 @@
 #PBS -l ngpus=1
 #PBS -l mem=512GB
 #PBS -l host=k097
-#PBS -o /srv/scratch/fabilab/fabio/projects/atlasapprox_saturn/logs/train_output.log
-#PBS -e /srv/scratch/fabilab/fabio/projects/atlasapprox_saturn/logs/train_error.log
+#PBS -o /srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/logs/train_output.log
+#PBS -e /srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/logs/train_error.log
 #PBS -j oe
 #PBS -J 1-25
 
@@ -25,7 +25,7 @@ conda activate saturn
 cd /srv/scratch/fabilab/fabio/projects/atlasapprox_saturn/aasaturn/pipelines
 
 # Create a log file name with the current date and time
-LOG_FILE="/srv/scratch/fabilab/fabio/projects/atlasapprox_saturn/logs/train_output_$(date '+%Y-%m-%d_%H-%M-%S').log"
+LOG_FILE="/srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/logs/train_output_$(date '+%Y-%m-%d_%H-%M-%S').log"
 
 # Log the start time
 echo "Job started at: $(date)" >> "$LOG_FILE"

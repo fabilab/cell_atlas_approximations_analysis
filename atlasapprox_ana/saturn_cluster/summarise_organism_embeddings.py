@@ -23,7 +23,7 @@ LAST_LAYER_C = -1  # ESMc
 
 def infer_model(embedding_dir):
     model = str(embedding_dir).split("_")[-1].upper()
-    if "esmc600" in model:
+    if "ESMC600" in model:
         model = "ESMc600"
     else:
         model = model[:-1] + model[-1].lower()
@@ -90,12 +90,16 @@ if __name__ == "__main__":
     fasta_root_folder = Path(
         "/mnt/data/projects/cell_atlas_approximations/reference_atlases/data/saturn/peptide_sequences/"
     )
+    if not fasta_root_folder.exists():
+        fasta_root_folder = Path(
+            "/srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/data/reference_atlases/peptide_sequences/"
+        )
     fasta_files = os.listdir(fasta_root_folder)
 
     if args.model == "esm1b":
         embedding_root_fdn = fasta_root_folder.parent / "esm_embeddings"
         output_fdn = embedding_root_fdn.parent / "esm_embeddings_summaries/"
-    elif args.model == "esmc600"
+    elif args.model == "esmc600":
         embedding_root_fdn = fasta_root_folder.parent / "esmc600_embeddings"
         output_fdn = embedding_root_fdn.parent / "esmc600_embeddings_summaries/"
     else:
@@ -105,6 +109,6 @@ if __name__ == "__main__":
     os.makedirs(output_fdn, exist_ok=True)
 
     for subfdn in os.listdir(embedding_root_fdn):
-        if (args.species is not None) and (species not in subfdn):
+        if (args.species is not None) and (args.species not in subfdn):
             continue
         summarize_gene_embeddings(subfdn)
