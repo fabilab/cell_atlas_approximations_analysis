@@ -1,2 +1,14 @@
+# Virtual environment
 .venv
-data/atlas_data
+
+# Data
+data
+
+# Figures
+figures
+
+# Software
+software
+
+# Logs
+logs
