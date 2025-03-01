@@ -61,9 +61,9 @@ def summarize_gene_embeddings(subfdn) -> None:
     for protein_embedding_path in tqdm(protein_embedding_paths):
         gene = Path(protein_embedding_path).stem
 
-        embedding = torch.load(protein_embedding_path)["mean_representations"][
-            last_layer
-        ]
+        tmp = torch.load(protein_embedding_path)
+        embedding = tmp["mean_representations"][last_layer]
+
         gene_symbol_to_embedding[gene] = embedding
 
     genes = list(gene_symbol_to_embedding.keys())
@@ -97,4 +97,7 @@ if __name__ == "__main__":
     os.makedirs(output_fdn, exist_ok=True)
 
     for subfdn in os.listdir(embedding_root_fdn):
+        species = subfdn.split(".")[0]
+        if species not in args.species:
+            continue
         summarize_gene_embeddings(subfdn)
