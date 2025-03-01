@@ -2,7 +2,13 @@
 .venv
 
 # Data
-data/atlas_data
+data
 
 # Figures
 figures
+
+# Software
+software
+
+# Logs
+logs
