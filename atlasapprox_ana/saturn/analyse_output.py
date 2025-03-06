@@ -275,10 +275,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Whether to save the figures",
     )
+    parser.add_argument(
+        "--protein-model",
+        type=str,
+        choices=["esm1b", "esmc", "esmc600"],
+        default="esm1b",
+        help="Which protein language model to use.",
+    )
     args = parser.parse_args()
 
     output_fdn = pathlib.Path(
-        f"/mnt/data/projects/cell_atlas_approximations/reference_atlases/data/saturn/output_nmacro{args.n_macro}_nhvg{args.n_hvg}_epochs_p{args.pretrain_epochs}_m{args.epochs}"
+        "/mnt/data/projects/cell_atlas_approximations/reference_atlases/data/saturn/"
+    )
+    if args.protein_model == "esmc":
+        output_fdn = output_fdn / "saturn_output_esmc"
+    output_fdn = (
+        output_fdn
+        / f"output_nmacro{args.n_macro}_nhvg{args.n_hvg}_epochs_p{args.pretrain_epochs}_m{args.epochs}"
     )
     if not output_fdn.exists():
         sys.exit(f"Output folder {output_fdn} does not exist")
@@ -972,7 +985,7 @@ if __name__ == "__main__":
         ],
     }
     for gname, gcell_types in ct_groups.items():
-        if gname != "muscle":
+        if gname != "immune":
             continue
         tmp = (
             adata.obs.groupby(["species", "cell_type"]).size().unstack(0, fill_value=0)
@@ -1367,6 +1380,9 @@ if __name__ == "__main__":
                         f"../figures/kde_{gname}phylopseudotime_3D.png",
                         dpi=300,
                     )
+
+    # FIXME:
+    sys.exit()
 
     if True:
         print("Start looking for macrogene changes along the tree")

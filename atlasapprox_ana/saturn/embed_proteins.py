@@ -17,7 +17,9 @@ if __name__ == "__main__":
         description="Embed all proteins from all species using ESM."
     )
     parser.add_argument("--species", default=None, help="Only process these species")
-    parser.add_argument("--model", default="esm1b", choices=["esm1b", "esmc"])
+    parser.add_argument(
+        "--model", default="esm1b", choices=["esm1b", "esmc", "esmc600"]
+    )
     args = parser.parse_args()
 
     fasta_root_folder = pathlib.Path(
@@ -27,8 +29,10 @@ if __name__ == "__main__":
 
     if args.model == "esm1b":
         output_root_folder = fasta_root_folder.parent / "esm_embeddings"
-    else:
+    elif args.model == "esmc":
         output_root_folder = fasta_root_folder.parent / "esmc_embeddings"
+    else:
+        output_root_folder = fasta_root_folder.parent / "esmc600_embeddings"
 
     os.makedirs(output_root_folder, exist_ok=True)
 
@@ -68,30 +72,62 @@ if __name__ == "__main__":
             sp.run(" ".join(call), check=True, shell=True)
 
         else:
+            from concurrent.futures import ThreadPoolExecutor
+            from typing import Sequence, Union
             from Bio import SeqIO
             import torch
             from esm.models.esmc import ESMC
-            from esm.sdk.api import ESMProtein, LogitsConfig
+            from esm.sdk.api import (
+                ESM3InferenceClient,
+                ESMProtein,
+                ESMProteinError,
+                LogitsConfig,
+                LogitsOutput,
+                ProteinType,
+            )
+
+            EMBEDDING_CONFIG = LogitsConfig(sequence=True, return_embeddings=True)
+
+            def embed_sequence(
+                client: ESM3InferenceClient,
+                sequence: str,
+                fn_out: Union[str, pathlib.Path],
+            ) -> LogitsOutput:
+                protein = ESMProtein(sequence=sequence)
+                protein_tensor = client.encode(protein)
+                output = client.logits(protein_tensor, EMBEDDING_CONFIG)
+
+                # Compute mean of embeddings across sequence length
+                # https://github.com/evolutionaryscale/esm/blob/main/cookbook/tutorials/2_embed.ipynb
+                emb_mean = output.embeddings.mean(axis=-2).squeeze()
+                torch.save({"mean_representations": {-1: emb_mean}}, fn_out)
+
+                return emb_mean
+
+            model_name = "esmc_300m" if args.model == "esmc" else "esmc_600m"
+            client = ESMC.from_pretrained(model_name).to("cuda")  # or "cpu"
 
             with open(fasta_file_abs_path, "rt") as handle:
-                for ir, record in enumerate(SeqIO.parse(handle, "fasta")):
-                    name = record.id
-                    fn_out = output_folder_abs_path / f"{name}.pt"
-                    if fn_out.exists():
-                        print(f"{ir + 1} {name} already processed")
-                        continue
-                    print(ir + 1, name)
+                with ThreadPoolExecutor() as executor:
+                    futures = []
+                    for ir, record in enumerate(SeqIO.parse(handle, "fasta")):
+                        name = record.id
+                        fn_out = output_folder_abs_path / f"{name}.pt"
+                        # Exploit a trick for gene names with slashes here (e.g. frog)
+                        os.makedirs(fn_out.parent, exist_ok=True)
 
-                    sequence = str(record.seq)
-                    protein = ESMProtein(sequence=sequence)
-                    client = ESMC.from_pretrained("esmc_300m").to("cuda")  # or "cpu"
-                    protein_tensor = client.encode(protein)
-                    # NOTE: we might want a specific hidden layer, like PROST does on ESM1b?
-                    logits_output = client.logits(
-                        protein_tensor,
-                        LogitsConfig(sequence=True, return_embeddings=True),
-                    )
-                    # Compute mean of embeddings across sequence length
-                    # https://github.com/evolutionaryscale/esm/blob/main/cookbook/tutorials/2_embed.ipynb
-                    emb_mean = logits_output.embeddings.mean(axis=-2).squeeze()
-                    torch.save({"mean_representations": {-1: emb_mean}}, fn_out)
+                        if fn_out.exists():
+                            print(f"{ir + 1} {name} already processed")
+                            continue
+                        print(ir + 1, name)
+
+                        sequence = str(record.seq)
+                        futures.append(
+                            executor.submit(embed_sequence, client, sequence, fn_out)
+                        )
+
+                    for future in futures:
+                        try:
+                            future.result()
+                        except Exception as e:
+                            print(ESMProteinError(500, str(e)))
