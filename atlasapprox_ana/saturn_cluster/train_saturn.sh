@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -l walltime=12:00:00
-#PBS -l ncpus=16
+#PBS -l ncpus=8
 #PBS -l ngpus=1
 #PBS -l mem=256GB
 #PBS -o /srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/logs/train_output.log
@@ -15,6 +15,9 @@
 # Because there is currently little virtualisation tooling to quota GPU VRAM to jobs, a job
 # that requires a whole GPU should best request 32 CPUs and 512 GB of RAM even though that
 # might not be strictly necessary. Or just request the whole machine by doubling that.
+
+# NOTE: k099 from SBF has 32 cores, 1 TB of memory, and 4 GPUs, so if we want 1 GPU at a time
+# we can request one fourth of everything.
 
 #export TF_CPP_MIN_LOG_LEVEL=2
 #export TF_ENABLE_ONEDNN_OPTS=0
@@ -33,7 +36,7 @@ LOG_FILE="/srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis
 echo "Job started at: $(date)" >> "$LOG_FILE"
 
 # Run the pre-training code and capture runtime logs
-python train_saturn.py --n-macro 2000 --n-hvg 8000 --n-epochs 100 --n-pretrain-epochs 200 --protein-model esmc600 \
+python train_saturn.py --n-macro 2000 --n-hvg 8000 --n-epochs 50 --n-pretrain-epochs 100 --protein-model esm1b \
   2>&1 | tee -a "$LOG_FILE"
 
 # Log the end time
