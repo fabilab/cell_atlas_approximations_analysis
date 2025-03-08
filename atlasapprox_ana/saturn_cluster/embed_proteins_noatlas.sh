@@ -21,8 +21,8 @@
 # priority access to the GPUs. The other nodes (e.g. k106) have older GPUs (e.g. V100).
 
 # Activate the environment
-#source ~/miniconda3/bin/activate && conda activate esm
-source /srv/scratch/fabilab/fabio/miniforge3/bin/activate && conda activate esmc
+source /srv/scratch/fabilab/fabio/miniforge3/bin/activate && conda activate esm
+#source /srv/scratch/fabilab/fabio/miniforge3/bin/activate && conda activate esmc
 
 # Move to the source directory
 cd /srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/atlasapprox_ana/saturn_cluster
@@ -34,7 +34,7 @@ LOG_FILE="/srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis
 echo "Job started at: $(date)" >> "$LOG_FILE"
 
 # Run the pre-training code and capture runtime logs
-python embed_proteins.py --model esmc600 --species-number ${PBS_ARRAY_INDEX} \
+python embed_proteins.py --model esm1b --species t_cynocephalus \
   2>&1 | tee -a "$LOG_FILE"
 
 # Log the end time

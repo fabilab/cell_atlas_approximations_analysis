@@ -20,13 +20,17 @@ def run_esm1b(
     fasta_file_abs_path,
     output_folder_abs_path,
     ):
+    root_fdn = pathlib.Path("/home/fabio/projects/termites")
+    if not root_fdn.exists():
+        root_fdn = pathlib.Path("/srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis")
     script_path = (
-        pathlib.Path("/home/fabio/projects/termites")
+        root_fdn
         / "software"
         / "esm"
         / "scripts"
         / "extract.py"
     )
+
     call = [
         "python",
         str(script_path),
@@ -176,8 +180,18 @@ if __name__ == "__main__":
         fasta_root_folder = pathlib.Path(
             "/srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/data/reference_atlases/peptide_sequences/"
         )
-    fasta_files = os.listdir(fasta_root_folder)
 
+    # Species without an atlas are stored elsewhere to limit interactions
+    if (args.species is not None):
+        fasta_noatlas_root_folder = pathlib.Path(
+            "/srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/data/noatlas_species/peptide_sequences/"
+        )
+        noatlas_fns = os.listdir(fasta_noatlas_root_folder)
+        if f"{args.species}.fasta" in noatlas_fns:
+            fasta_root_folder = fasta_noatlas_root_folder
+
+    fasta_files = os.listdir(fasta_root_folder)
+    
     if args.model == "esm1b":
         output_root_folder = fasta_root_folder.parent / "esm_embeddings"
     elif args.model == "esmc600":
