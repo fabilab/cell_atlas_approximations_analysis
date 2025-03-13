@@ -25,10 +25,18 @@ if __name__ == "__main__":
     fasta_root_folder = pathlib.Path(
         "/mnt/data/projects/cell_atlas_approximations/reference_atlases/data/saturn/peptide_sequences/"
     )
+    # Species without an atlas are stored elsewhere to limit interactions
+    if args.species is not None:
+        fasta_noatlas_root_folder = pathlib.Path(
+            "/mnt/data/projects/cell_atlas_approximations/noatlas_species/peptide_sequences/"
+        )
+        noatlas_fns = os.listdir(fasta_noatlas_root_folder)
+        if f"{args.species}.fasta" in noatlas_fns:
+            fasta_root_folder = fasta_noatlas_root_folder
     fasta_files = os.listdir(fasta_root_folder)
 
     if args.model == "esm1b":
-        output_root_folder = fasta_root_folder.parent / "esm_embeddings"
+        output_root_folder = fasta_root_folder.parent / "esm1b_embeddings"
     elif args.model == "esmc":
         output_root_folder = fasta_root_folder.parent / "esmc_embeddings"
     else:
