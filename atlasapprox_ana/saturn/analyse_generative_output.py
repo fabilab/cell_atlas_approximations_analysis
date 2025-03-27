@@ -214,7 +214,11 @@ if __name__ == "__main__":
     )
 
     print("Plot UMAP by cell supertype")
-    fig, ax = plt.subplots(figsize=(4.5, 4.5))
+    if args.species != "t_cynocephalus":
+        width, height = 4.3, 3
+    else:
+        width, height = 4.5, 4.5
+    fig, ax = plt.subplots(figsize=(width, height))
     palette = {
         "endothelial": "tomato",
         "epithelial": "violet",
@@ -222,6 +226,9 @@ if __name__ == "__main__":
         "immune": "yellowgreen",
         "other": "gold",
     }
+    kwargs = {}
+    if args.species == "t_cynocephalus":
+        kwargs["legend_loc"] = "lower right"
     sc.pl.umap(
         adata_gen,
         color="cell_supertype",
@@ -229,9 +236,9 @@ if __name__ == "__main__":
         size=50,
         add_outline=True,
         palette=palette,
-        alpha=0.3,
-        legend_loc="lower right",
+        alpha=0.2,
         title="",
+        **kwargs,
     )
     ax.set_axis_off()
     fig.tight_layout()
@@ -447,6 +454,7 @@ if __name__ == "__main__":
             f"../../figures/{args.species}/{args.species}_celltype_neighbors_stats.png",
             dpi=300,
         )
+
     if args.species != "t_cynocephalus":
         print(
             "Plot distribution of nearest neighbors in individual cell types compared to original atlas"
@@ -456,30 +464,221 @@ if __name__ == "__main__":
         orig_atlas_fns = glob.glob(
             "/mnt/data/projects/cell_atlas_approximations/reference_atlases/data/curated_atlases/h_sapiens_*gene_expression.h5ad"
         )
+        print("  Read original cell atlas")
         adata_origd = {}
         for fn in orig_atlas_fns:
             tissue = pathlib.Path(fn).stem.split("_")[2]
-            break
+            adata_origd[tissue] = anndata.read_h5ad(fn)
+            adata_origd[tissue].obs["tissue"] = tissue
+        if len(adata_origd) > 1:
+            print("  Concatenate tissues")
+            adata_orig = anndata.concat(adata_origd.values())
+        else:
+            adata_orig = list(adata_origd.values())[0]
 
-    sys.exit()
+        print("  Preprocess original atlas (norm, PCA, etc)")
+        sc.pp.highly_variable_genes(adata_orig, flavor="cell_ranger")
+        sc.pp.normalize_total(adata_orig, target_sum=1e4)
+        sc.pp.pca(adata_orig)
+        sc.pp.neighbors(adata_orig)
 
-    print("Plot UMAP with marker genes")
-    for ct in ["B", "macrophage", "smooth muscle", "striated muscle", "neuron"]:
-        fig, axs = plt.subplots(2, 2, figsize=(8, 8), sharex=True, sharey=True)
-        markers = adata_gen.uns["rank_genes_groups"]["names"][ct][
-            : len(axs.ravel()) - 1
-        ]
-        axs = axs.ravel()
-        sc.pl.umap(
-            adata_gen,
-            color="ref_labels",
-            groups=[ct],
-            na_color=(0.9, 0.9, 0.9, 0.01),
-            ax=axs[0],
-            size=50,
+        print("  Finally, compute the neighbors fraction in original atlas")
+        idx = np.random.choice(adata_orig.n_obs, 6000, replace=False)
+        neis = adata_orig.obsp["connectivities"][idx]
+        idxn = np.asarray(neis.argmax(axis=1)).ravel()
+        st1 = adata_orig.obs["cellType"].values[idx]
+        stn = adata_orig.obs["cellType"].values[idxn]
+        df = pd.DataFrame({"st1": st1, "stn": stn})
+        df["c"] = 1
+        gby_orig = (
+            df.groupby(["st1", "stn"], observed=True).size().unstack(fill_value=0)
         )
-        axs[0].set_axis_off()
-        for ax, gene in zip(axs[1:], markers):
+        frac_orig = {
+            g: gby_orig.loc[g, g] / gby_orig.loc[g].sum()
+            for g in gby_orig.index
+            if g in gby_orig.columns
+        }
+
+        palette = {
+            "monocyte": "tomato",
+            "macrophage": "grey",
+            "T": "gold",
+            "B": "violet",
+            "mast": "yellowgreen",
+            "striated muscle": "steelblue",
+            "smooth muscle": "navy",
+            "vascular smooth muscle": "cadetblue",
+            "pericyte": "deeppink",
+            "brush": "tan",
+            "basal": "peru",
+            "ciliated": "chocolate",
+            "HSC": "black",
+            "erythrocyte": "red",
+            "neuron": "blue",
+            "hepatocyte": "mediumpurple",
+            "alpha": "maroon",
+            "beta": "lightcoral",
+            "acinar": "chartreuse",
+            "capillary": "darkgreen",
+            "CAP2": "darkolivegreen",
+            "arterial": "salmon",
+            "venous": "darkslateblue",
+        }
+        palette = {
+            key: value
+            for key, value in palette.items()
+            if key in frac and key in frac_orig
+        }
+        tmp = pd.DataFrame({"orig": frac_orig, "synt": frac}).loc[list(palette.keys())]
+        ct_order = (tmp["orig"] - tmp["synt"]).sort_values().index
+        fig, ax = plt.subplots(figsize=(1 + 0.4 * len(palette), 3.5))
+        xticklabels = []
+        yarr = np.linspace(0, 1, 200)
+        for i, st in enumerate(ct_order):
+            color = palette[st]
+            fr = frac[st]
+            fr_orig = frac_orig[st]
+            ax.scatter(
+                [i],
+                [100 * fr],
+                s=70,
+                facecolor=palette[st],
+                edgecolor="darkgrey",
+                lw=2,
+                clip_on=False,
+                zorder=10,
+            )
+            ax.scatter(
+                [i],
+                [100 * fr_orig],
+                s=70,
+                marker="s",
+                facecolor=palette[st],
+                edgecolor="darkgrey",
+                lw=2,
+                clip_on=False,
+                zorder=9,
+            )
+            if abs(fr - fr_orig) > 0.20:
+                sgn = (fr > fr_orig) * 2 - 1
+                y0 = fr_orig + sgn * 0.08
+                y1 = fr - sgn * 0.1
+                ax.arrow(
+                    i,
+                    100 * y0,
+                    0,
+                    100 * (y1 - y0),
+                    head_width=0.2,
+                    head_length=5,
+                    fc=color,
+                )
+
+            frtmp = frac_null[st].values
+            frtmp = frtmp[~np.isnan(frtmp)]
+            if len(np.unique(frtmp)) > 1:
+                harr = gaussian_kde(frtmp)(yarr)
+            else:
+                harr = 0 * yarr
+                harr[(yarr - frac_null[st].values[0]) ** 2 < 0.01] = 1
+            harr /= 2.5 * harr.max()
+            idxtmp = harr > 0.01
+            ax.fill_betweenx(
+                100 * yarr[idxtmp],
+                i - harr[idxtmp],
+                i + harr[idxtmp],
+                color=palette[st],
+                alpha=0.3,
+            )
+            xticklabels.append(st)
+        ax.set_xticks(range(len(palette)))
+        ax.set_xticklabels(xticklabels, rotation=45, ha="right")
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0, 50, 100])
+        ax.grid(True, axis="y")
+        ax.set_ylabel("% cell neighbors\nwithin cell type")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout()
+        if args.savefig:
+            fig.savefig(
+                f"../../figures/{args.species}/{args.species}_celltype_neighbors_stats_with_orig.svg",
+            )
+            fig.savefig(
+                f"../../figures/{args.species}/{args.species}_celltype_neighbors_stats_with_orig.png",
+                dpi=300,
+            )
+
+    if False:
+        print("Plot UMAP with marker genes")
+        # Macrophages: one can use SLC12A1 as an example that it's not totally random, but hard
+        for ct in ["B", "macrophage", "smooth muscle", "striated muscle", "neuron"]:
+            fig, axs = plt.subplots(2, 2, figsize=(8, 8), sharex=True, sharey=True)
+            markers = adata_gen.uns["rank_genes_groups"]["names"][ct][
+                : len(axs.ravel()) - 1
+            ]
+            axs = axs.ravel()
+            sc.pl.umap(
+                adata_gen,
+                color="ref_labels",
+                groups=[ct],
+                na_color=(0.9, 0.9, 0.9, 0.01),
+                ax=axs[0],
+                size=50,
+            )
+            axs[0].set_axis_off()
+            for ax, gene in zip(axs[1:], markers):
+                species_idx = gene_ser_dict[args.species][gene]
+                human_idx = (
+                    cdis_to_human[species_idx]
+                    .topk(3, largest=False)
+                    .indices.cpu()
+                    .numpy()
+                )
+                human_homologs = ",".join(human_genes[human_idx])
+                sc.pl.umap(
+                    adata_gen,
+                    color=gene,
+                    ax=ax,
+                    size=50,
+                    title=f"{gene}\n({human_homologs})",
+                )
+                ax.set_axis_off()
+            fig.suptitle(ct)
+            fig.tight_layout()
+            break
+            if args.savefig:
+                fig.savefig(
+                    f"../../figures/{args.species}/{args.species}_umap_{ct}_markers_with_human_homologs.png",
+                    dpi=300,
+                )
+
+    if args.species == "t_cynocephalus":
+        print("Plot UMAP with select marker genes")
+        shortlist = [
+            ("striated muscle", "rna-TRANSCRIPT_031960541.1"),
+            # ("macrophage", "rna-TRANSCRIPT_012547249.2"),
+            ("B", "rna-TRANSCRIPT_031962951.1"),
+        ]
+        for ct, gene in shortlist:
+            palette = {
+                key: "grey" for key in adata_gen.obs["ref_labels"].cat.categories
+            }
+            palette[ct] = "tomato"
+            fig, axs = plt.subplots(1, 2, figsize=(7, 3.5))
+            sc.pl.umap(
+                adata_gen,
+                color="ref_labels",
+                groups=[ct],
+                palette=palette,
+                na_color=(0.9, 0.9, 0.9, 0.01),
+                ax=axs[0],
+                size=50,
+                title=ct,
+                na_in_legend=False,
+                legend_loc=None,
+            )
+            axs[0].set_axis_off()
+            ax = axs[1]
             species_idx = gene_ser_dict[args.species][gene]
             human_idx = (
                 cdis_to_human[species_idx].topk(3, largest=False).indices.cpu().numpy()
@@ -490,62 +689,15 @@ if __name__ == "__main__":
                 color=gene,
                 ax=ax,
                 size=50,
-                title=f"{gene}\n({human_homologs})",
+                title=f"{gene}\n(human {human_homologs})",
             )
             ax.set_axis_off()
-        fig.suptitle(ct)
-        fig.tight_layout()
-        break
-        if args.savefig:
-            fig.savefig(
-                f"../../figures/{args.species}/{args.species}_umap_{ct}_markers_with_human_homologs.png",
-                dpi=300,
-            )
-
-    # Macrophages: one can use SLC12A1 as an example that it's not totally random, but hard
-    print("Plot UMAP with select marker genes")
-    shortlist = [
-        ("striated muscle", "rna-TRANSCRIPT_031960541.1"),
-        # ("macrophage", "rna-TRANSCRIPT_012547249.2"),
-        ("B", "rna-TRANSCRIPT_031962951.1"),
-    ]
-    for ct, gene in shortlist:
-        palette = {key: "grey" for key in adata_gen.obs["ref_labels"].cat.categories}
-        palette[ct] = "tomato"
-        fig, axs = plt.subplots(2, 1, figsize=(4, 7))
-        sc.pl.umap(
-            adata_gen,
-            color="ref_labels",
-            groups=[ct],
-            palette=palette,
-            na_color=(0.9, 0.9, 0.9, 0.01),
-            ax=axs[0],
-            size=50,
-            title="",
-            na_in_legend=False,
-            legend_loc="lower right",
-        )
-        axs[0].set_axis_off()
-        ax = axs[1]
-        species_idx = gene_ser_dict[args.species][gene]
-        human_idx = (
-            cdis_to_human[species_idx].topk(3, largest=False).indices.cpu().numpy()
-        )
-        human_homologs = ",".join(human_genes[human_idx])
-        sc.pl.umap(
-            adata_gen,
-            color=gene,
-            ax=ax,
-            size=50,
-            title=f"{gene}\n(human {human_homologs})",
-        )
-        ax.set_axis_off()
-        fig.tight_layout()
-        if args.savefig:
-            fig.savefig(
-                f"../../figures/{args.species}/{args.species}_umap_{gene}_with_human_homologs.png",
-                dpi=300,
-            )
+            fig.tight_layout()
+            if args.savefig:
+                fig.savefig(
+                    f"../../figures/{args.species}/{args.species}_umap_{gene}_with_human_homologs.png",
+                    dpi=300,
+                )
 
     if True:
         print("Plot UMAP with human marker genes")
