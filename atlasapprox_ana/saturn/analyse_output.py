@@ -63,6 +63,28 @@ full_name_dict = {
 full_name_dict_rev = {val: key for key, val in full_name_dict.items()}
 
 
+####### PHYLOGENY-ADJUSTED PSEUDOTIME ######
+def adjust_pseudotime_for_phylogeny(
+    adata,
+    pseudotime_column="dpt_pseudotime",
+    species_column="species",
+    new_column="dpt_pseudotime_stdscale",
+):
+    """Compute new column for pseudotime adjusted by phylogeny."""
+    dpt_mins = adata.obs.groupby(species_column)[pseudotime_column].min()
+    dpt_maxs = adata.obs.groupby(species_column)[pseudotime_column].max()
+    adata_group_strict.obs[new_column] = (
+        adata_group_strict.obs[pseudotime_column]
+        - adata_group_strict.obs[species_column].map(dpt_mins).astype(float)
+    ) / (
+        adata_group_strict.obs[species_column].map(dpt_maxs).astype(float)
+        - adata_group_strict.obs[species_column].map(dpt_mins).astype(float)
+    )
+
+
+############################################
+
+
 def find_otts(names):
     import requests
 
@@ -1162,19 +1184,12 @@ if __name__ == "__main__":
             sc.tl.dpt(adata_group_strict)
 
             # Adjust for phylogeny (this is why it's called "phylogeny-adjusted")
-            dpt_mins = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].min()
-            dpt_maxs = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].max()
-            adata_group_strict.obs["dpt_pseudotime_stdscale"] = (
-                adata_group_strict.obs["dpt_pseudotime"]
-                - adata_group_strict.obs["species"].map(dpt_mins).astype(float)
-            ) / (
-                adata_group_strict.obs["species"].map(dpt_maxs).astype(float)
-                - adata_group_strict.obs["species"].map(dpt_mins).astype(float)
+            adjust_pseudotime_for_phylogeny(
+                adata_group_strict,
+                species_column="species",
+                pseudotime_column="dpt_pseudotime",
+                new_column="dpt_pseudotime_stdscale",
             )
-
-            # NOTE: The result o the computations above, i.e. the column
-            # dpt_pseudotime_stdscale, is what we call "Phylogeny-adjusted pseudotime"
-            # in the paper.
 
             print(" Plot pseudotime along the tree")
             fig = plt.figure(figsize=(17, 15))
