@@ -223,7 +223,6 @@ def recalibrate_tree(tree, known_ca_times=None):
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description="Analyse the output of SATURN.")
     parser.add_argument(
         "--n-macro",
@@ -386,7 +385,7 @@ if __name__ == "__main__":
             ca = tree.common_ancestor(leaf1, leaf2)
             known_ca_times[
                 (full_name_dict_rev[leaf1.name], full_name_dict_rev[leaf2.name])
-            ] = (1200 - ca.depth)
+            ] = 1200 - ca.depth
 
     if False:
         print("Find the remote cell types closest to groups of human cells")
@@ -924,7 +923,7 @@ if __name__ == "__main__":
             axes=ax,
             show_confidence=False,
             do_show=False,
-            label_func=lambda x: (x.name if x.name in species_full_names else None),
+            label_func=lambda x: x.name if x.name in species_full_names else None,
         )
         fig.tight_layout()
 
@@ -1138,9 +1137,13 @@ if __name__ == "__main__":
                 adata_group_strict.obsp["connectivities"],
                 adata_group_strict.obsp["distances"],
             )
+
+            # Compute standard pseudotime
             sc.pp.neighbors(adata_group_strict)
             sc.tl.diffmap(adata_group_strict)
             sc.tl.dpt(adata_group_strict)
+
+            # Adjust for phylogeny
             dpt_mins = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].min()
             dpt_maxs = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].max()
             adata_group_strict.obs["dpt_pseudotime_stdscale"] = (
@@ -1150,6 +1153,10 @@ if __name__ == "__main__":
                 adata_group_strict.obs["species"].map(dpt_maxs).astype(float)
                 - adata_group_strict.obs["species"].map(dpt_mins).astype(float)
             )
+
+            # NOTE: The result o the computations above, i.e. the column
+            # dpt_pseudotime_stdscale, is what we call "Phylogeny-adjusted pseudotime"
+            # in the paper.
 
             print(" Plot pseudotime along the tree")
             fig = plt.figure(figsize=(17, 15))
@@ -1370,12 +1377,15 @@ if __name__ == "__main__":
 
     if True:
         print("Start looking for macrogene changes along the tree")
-        species_bait, cell_types_bait = "h_sapiens", [
-            # "smooth muscle",
-            # "vascular smooth muscle",
-            "striated muscle",
-            "cardiomyocyte",
-        ]
+        species_bait, cell_types_bait = (
+            "h_sapiens",
+            [
+                # "smooth muscle",
+                # "vascular smooth muscle",
+                "striated muscle",
+                "cardiomyocyte",
+            ],
+        )
         print(
             f" Find macrogene markers for a group of cell types in bait organism {species_bait}"
         )
@@ -1739,7 +1749,6 @@ if __name__ == "__main__":
         fig.tight_layout()
 
     if args.umap_dim == 2:
-
         if False:
             sc.pl.umap(
                 adata, color="species", title="Species", add_outline=True, size=20
