@@ -5,7 +5,7 @@ This must be run inside the Python 3.10 saturn conda environment: source ~/minic
 
 import os
 import json
-from pathlib import Path
+import pathlib
 import argparse
 from typing_extensions import Literal
 import glob
@@ -37,7 +37,7 @@ def summarize_gene_embeddings(subfdn) -> None:
     embedding_model = infer_model(embedding_dir=embedding_dir)
     embedding_model_lower = embedding_model.lower()
 
-    species = Path(subfdn).stem
+    species = pathlib.Path(subfdn).stem
     print(species)
     output_fn = output_fdn / f"{species}_gene_all_{embedding_model_lower}.pt"
     print(output_fn)
@@ -64,11 +64,11 @@ def summarize_gene_embeddings(subfdn) -> None:
     # within each gene, with equal weights across isoforms.
     gene_symbol_to_embedding = {}
     for protein_embedding_path in tqdm(protein_embedding_paths):
-        gene = Path(protein_embedding_path).stem
+        gene = pathlib.Path(protein_embedding_path).stem
 
-        embedding = torch.load(protein_embedding_path)["mean_representations"][
-            last_layer
-        ]
+        tmp = torch.load(protein_embedding_path)
+        embedding = tmp["mean_representations"][last_layer]
+
         gene_symbol_to_embedding[gene] = embedding
 
     genes = list(gene_symbol_to_embedding.keys())
@@ -84,18 +84,28 @@ if __name__ == "__main__":
         description="Summarise gene embeddings into one file per species."
     )
     parser.add_argument("--species", default=None, help="Only process these species")
-    parser.add_argument("--model", default="esm1b", choices=["esm1b", "esmc", "esmc600"])
+    parser.add_argument(
+        "--model", default="esm1b", choices=["esm1b", "esmc", "esmc600"]
+    )
     args = parser.parse_args()
 
-    fasta_root_folder = Path(
+    fasta_root_folder = pathlib.Path(
         "/mnt/data/projects/cell_atlas_approximations/reference_atlases/data/saturn/peptide_sequences/"
     )
+    # Species without an atlas are stored elsewhere to limit interactions
+    if args.species is not None:
+        fasta_noatlas_root_folder = pathlib.Path(
+            "/mnt/data/projects/cell_atlas_approximations/noatlas_species/peptide_sequences/"
+        )
+        noatlas_fns = os.listdir(fasta_noatlas_root_folder)
+        if f"{args.species}.fasta" in noatlas_fns:
+            fasta_root_folder = fasta_noatlas_root_folder
     fasta_files = os.listdir(fasta_root_folder)
 
     if args.model == "esm1b":
-        embedding_root_fdn = fasta_root_folder.parent / "esm_embeddings"
-        output_fdn = embedding_root_fdn.parent / "esm_embeddings_summaries/"
-    elif args.model == "esmc600"
+        embedding_root_fdn = fasta_root_folder.parent / "esm1b_embeddings"
+        output_fdn = embedding_root_fdn.parent / "esm1b_embeddings_summaries/"
+    elif args.model == "esmc600":
         embedding_root_fdn = fasta_root_folder.parent / "esmc600_embeddings"
         output_fdn = embedding_root_fdn.parent / "esmc600_embeddings_summaries/"
     else:
@@ -105,6 +115,7 @@ if __name__ == "__main__":
     os.makedirs(output_fdn, exist_ok=True)
 
     for subfdn in os.listdir(embedding_root_fdn):
-        if (args.species is not None) and (species not in subfdn):
+        species = subfdn.split(".")[0]
+        if (args.species is not None) and (species != args.species):
             continue
         summarize_gene_embeddings(subfdn)

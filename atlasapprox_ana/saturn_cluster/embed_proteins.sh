@@ -21,8 +21,8 @@
 # priority access to the GPUs. The other nodes (e.g. k106) have older GPUs (e.g. V100).
 
 # Activate the environment
-source /srv/scratch/fabilab/fabio/miniforge3/bin/activate
-conda activate esmc
+#source ~/miniconda3/bin/activate && conda activate esm
+source /srv/scratch/fabilab/fabio/miniforge3/bin/activate && conda activate esmc
 
 # Move to the source directory
 cd /srv/scratch/fabilab/fabio/projects/cell_atlas_approximations_analysis/atlasapprox_ana/saturn_cluster
