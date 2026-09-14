@@ -1126,6 +1126,9 @@ if __name__ == "__main__":
                 )
                 time_since_ca[species] = leaf_dict[species_bait].depth - node.depth
             time_since_ca = pd.Series(time_since_ca)
+
+            # Define the root cell as the most centrally embedded cell of this type
+            # (e.g. immune cell) in the oldest species.
             oldest_species = time_since_ca.idxmax()
             adata_group_strict = adata_group[
                 adata_group.obs["cell_type"].isin(gcell_types)
@@ -1144,19 +1147,21 @@ if __name__ == "__main__":
             ]
             idx_cell_zero = list(adata_group_strict.obs_names).index(cell_zero)
             adata_group_strict.uns["iroot"] = idx_cell_zero
+
             # NOTE: we need to recompute neighbors, otherwise the graph could be disconnected (by other cell types)
             # and even the connected part will have crazy weights (re UMAP onto cells that are not in the strict group)
             del (
                 adata_group_strict.obsp["connectivities"],
                 adata_group_strict.obsp["distances"],
             )
-
-            # Compute standard pseudotime
             sc.pp.neighbors(adata_group_strict)
+
+            # Compute standard pseudotime, on a cell graph that ONLY has cells of this type
+            # across all species
             sc.tl.diffmap(adata_group_strict)
             sc.tl.dpt(adata_group_strict)
 
-            # Adjust for phylogeny
+            # Adjust for phylogeny (this is why it's called "phylogeny-adjusted")
             dpt_mins = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].min()
             dpt_maxs = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].max()
             adata_group_strict.obs["dpt_pseudotime_stdscale"] = (
