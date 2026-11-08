@@ -63,6 +63,28 @@ full_name_dict = {
 full_name_dict_rev = {val: key for key, val in full_name_dict.items()}
 
 
+####### PHYLOGENY-ADJUSTED PSEUDOTIME ######
+def adjust_pseudotime_for_phylogeny(
+    adata,
+    pseudotime_column="dpt_pseudotime",
+    species_column="species",
+    new_column="dpt_pseudotime_stdscale",
+):
+    """Compute new column for pseudotime adjusted by phylogeny."""
+    dpt_mins = adata.obs.groupby(species_column)[pseudotime_column].min()
+    dpt_maxs = adata.obs.groupby(species_column)[pseudotime_column].max()
+    adata_group_strict.obs[new_column] = (
+        adata_group_strict.obs[pseudotime_column]
+        - adata_group_strict.obs[species_column].map(dpt_mins).astype(float)
+    ) / (
+        adata_group_strict.obs[species_column].map(dpt_maxs).astype(float)
+        - adata_group_strict.obs[species_column].map(dpt_mins).astype(float)
+    )
+
+
+############################################
+
+
 def find_otts(names):
     import requests
 
@@ -223,7 +245,6 @@ def recalibrate_tree(tree, known_ca_times=None):
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description="Analyse the output of SATURN.")
     parser.add_argument(
         "--n-macro",
@@ -399,7 +420,7 @@ if __name__ == "__main__":
             ca = tree.common_ancestor(leaf1, leaf2)
             known_ca_times[
                 (full_name_dict_rev[leaf1.name], full_name_dict_rev[leaf2.name])
-            ] = (1200 - ca.depth)
+            ] = 1200 - ca.depth
 
     if False:
         print("Find the remote cell types closest to groups of human cells")
@@ -937,7 +958,7 @@ if __name__ == "__main__":
             axes=ax,
             show_confidence=False,
             do_show=False,
-            label_func=lambda x: (x.name if x.name in species_full_names else None),
+            label_func=lambda x: x.name if x.name in species_full_names else None,
         )
         fig.tight_layout()
 
@@ -1127,6 +1148,9 @@ if __name__ == "__main__":
                 )
                 time_since_ca[species] = leaf_dict[species_bait].depth - node.depth
             time_since_ca = pd.Series(time_since_ca)
+
+            # Define the root cell as the most centrally embedded cell of this type
+            # (e.g. immune cell) in the oldest species.
             oldest_species = time_since_ca.idxmax()
             adata_group_strict = adata_group[
                 adata_group.obs["cell_type"].isin(gcell_types)
@@ -1145,6 +1169,7 @@ if __name__ == "__main__":
             ]
             idx_cell_zero = list(adata_group_strict.obs_names).index(cell_zero)
             adata_group_strict.uns["iroot"] = idx_cell_zero
+
             # NOTE: we need to recompute neighbors, otherwise the graph could be disconnected (by other cell types)
             # and even the connected part will have crazy weights (re UMAP onto cells that are not in the strict group)
             del (
@@ -1152,16 +1177,18 @@ if __name__ == "__main__":
                 adata_group_strict.obsp["distances"],
             )
             sc.pp.neighbors(adata_group_strict)
+
+            # Compute standard pseudotime, on a cell graph that ONLY has cells of this type
+            # across all species
             sc.tl.diffmap(adata_group_strict)
             sc.tl.dpt(adata_group_strict)
-            dpt_mins = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].min()
-            dpt_maxs = adata_group_strict.obs.groupby("species")["dpt_pseudotime"].max()
-            adata_group_strict.obs["dpt_pseudotime_stdscale"] = (
-                adata_group_strict.obs["dpt_pseudotime"]
-                - adata_group_strict.obs["species"].map(dpt_mins).astype(float)
-            ) / (
-                adata_group_strict.obs["species"].map(dpt_maxs).astype(float)
-                - adata_group_strict.obs["species"].map(dpt_mins).astype(float)
+
+            # Adjust for phylogeny (this is why it's called "phylogeny-adjusted")
+            adjust_pseudotime_for_phylogeny(
+                adata_group_strict,
+                species_column="species",
+                pseudotime_column="dpt_pseudotime",
+                new_column="dpt_pseudotime_stdscale",
             )
 
             print(" Plot pseudotime along the tree")
@@ -1386,12 +1413,15 @@ if __name__ == "__main__":
 
     if True:
         print("Start looking for macrogene changes along the tree")
-        species_bait, cell_types_bait = "h_sapiens", [
-            # "smooth muscle",
-            # "vascular smooth muscle",
-            "striated muscle",
-            "cardiomyocyte",
-        ]
+        species_bait, cell_types_bait = (
+            "h_sapiens",
+            [
+                # "smooth muscle",
+                # "vascular smooth muscle",
+                "striated muscle",
+                "cardiomyocyte",
+            ],
+        )
         print(
             f" Find macrogene markers for a group of cell types in bait organism {species_bait}"
         )
@@ -1755,7 +1785,6 @@ if __name__ == "__main__":
         fig.tight_layout()
 
     if args.umap_dim == 2:
-
         if False:
             sc.pl.umap(
                 adata, color="species", title="Species", add_outline=True, size=20

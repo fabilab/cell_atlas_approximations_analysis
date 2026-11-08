@@ -27,9 +27,7 @@ import seaborn as sns
 
 data_fdn = pathlib.Path("__file__").resolve().parent.parent / "data" / "atlas_data"
 
-blacklist_species = [
-    "c_intestinalis",  # not sure what happened, needs updating
-]
+blacklist_species = []
 plants = [
     "a_thaliana",
     "t_aestivum",
@@ -72,8 +70,10 @@ if __name__ == "__main__":
         n_markers_common_organs_original=15,
         max_homologs_per_query=5,
         n_cell_type_candidates=5,
+        min_candidate_score=0.3,
         n_markers_target=30,
         n_markers_common_organs_target=10,
+        check_reverse=True,
     ):
         api = atlasapprox.API()
 
@@ -112,7 +112,6 @@ if __name__ == "__main__":
             )
 
         # Find homologs in target organism
-        species = target_organism
         homologs = api.homologs(
             source_organism=source_organism,
             target_organism=target_organism,
@@ -125,7 +124,12 @@ if __name__ == "__main__":
                 for _, group in homologs.groupby("queries")
             ]
         )
-        homologs_unique = homologs["targets"].unique()
+        homologs["order"] = homologs["queries"].map(
+            lambda x: list(markers_common_organs).index(x)
+        )
+
+        # Get the unique list of homologs, sorted as faithfully as possible
+        homologs_unique = homologs.groupby("targets").order.min().sort_values().index
 
         # Find cell types expressing those homologs across organs (candidates)
         organs_target = api.organs(organism=target_organism)
@@ -134,221 +138,319 @@ if __name__ == "__main__":
             frac = api.fraction_detected(
                 organism=target_organism, organ=organ, features=homologs_unique
             )
+            # avg = api.average(
+            #    organism=target_organism, organ=organ, features=homologs_unique
+            # )
             score = frac.sum(axis=0)
+            # if "pericyte" in score.index:
+            #    __import__("ipdb").set_trace()
             cell_types_homoi = score.to_frame(name="score").reset_index()
             cell_types_homoi.rename(columns={"index": "cell_type"}, inplace=True)
             cell_types_homoi["organ"] = organ
             cell_types_homo.append(cell_types_homoi)
         cell_types_homo = pd.concat(cell_types_homo)
-        cell_type_candidates = (
+
+        # FIXME: sum() strongly biases toward common cell types, one has to
+        # improve. One argument is to check what organs the source cell type
+        # is found in and match.
+        # mean() is subject to weird effects by which suboptimal matches due
+        # to misannoations etc. drag down the entire score.
+        cell_type_candidate_scores = (
             cell_types_homo.groupby("cell_type")
-            .score.sum()
-            .sort_values(ascending=False)
-            .index[:n_cell_type_candidates]
+            .score.max()
+            .nlargest(n_cell_type_candidates)
         )
 
-        # Reverse search begins here: find markers for candidate cell types
-        markers_candidates = []
-        for organ in organs_target:
-            celltypes = api.celltypes(organism=species, organ=organ)
-            for ct_target in cell_type_candidates:
-                if ct_target in celltypes:
-                    markers_ct_target = api.markers(
-                        organism=species,
-                        organ=organ,
-                        cell_type=ct_target,
-                        number=n_markers_target,
-                    )
-                    markers_ct_target = [
-                        {"organ": organ, "gene": x, "rank": i, "cell_type": ct_target}
-                        for i, x in enumerate(markers_ct_target)
-                    ]
-                    markers_candidates.extend(markers_ct_target)
-        markers_candidates = pd.DataFrame(markers_candidates)
+        # __import__("ipdb").set_trace()
 
-        # Reverse homology search: how many of each candidate markers lead to common
-        # markers of the original cell type?
-        scores = []
-        markers_common_organs_ext = (
-            markers.groupby("gene")
-            .size()
-            .nlargest(n_markers_common_organs_original + 35)
-            .index
+        # Normalise scores to discount the number of organs sampled
+        cell_type_candidate_scores /= cell_type_candidate_scores.max()
+
+        idx = cell_type_candidate_scores >= min_candidate_score
+        cell_type_candidate_scores = cell_type_candidate_scores.loc[idx]
+
+        if not check_reverse:
+            return cell_type_candidate_scores
+
+        cell_type_candidate_scores = cell_type_candidate_scores.to_frame(name="fwd")
+
+        # Compute reverse scores using recursion
+        cell_type_candidate_scores["rev"] = 0.0
+        results_inverse = {}
+        for ct_target in cell_type_candidate_scores.index:
+            inverse_candidate_scores = find_sister_type(
+                source_organism=target_organism,
+                target_organism=source_organism,
+                cell_type=ct_target,
+                check_reverse=False,
+            )
+            results_inverse[ct_target] = inverse_candidate_scores
+            cell_type_candidate_scores.at[ct_target, "rev"] = (
+                inverse_candidate_scores.to_dict().get(cell_type, 0)
+                / inverse_candidate_scores.max()
+            )
+
+        # Weight fwd and reverse scores equally, and use L0.5 distance
+        # to bias such that the winner is not found only in one direction
+        cell_type_candidate_scores["compound"] = np.sqrt(
+            cell_type_candidate_scores[["fwd", "rev"]]
+        ).mean(axis=1)
+        cell_type_candidate_scores = cell_type_candidate_scores.sort_values(
+            "compound", ascending=False
         )
-        for ct_target, markers_ct_target in markers_candidates.groupby("cell_type"):
-            # Restrict to candidate markers common across target organism organs
-            markers_ct_target = (
-                markers_ct_target["gene"]
-                .value_counts()[:n_markers_common_organs_target]
-                .index
-            )
-            homologs_inverse = api.homologs(
-                source_organism=species,
-                target_organism="h_sapiens",
-                features=markers_ct_target,
-            )
-            # Reverse score is how many of an extended list of common original markers
-            # are hit by the reverse homology. This is by design inaccurate: exact
-            # homology distance could mislead since the funcional homolog can be
-            # not the closest match
-            homologs_inverse["found"] = homologs_inverse["targets"].isin(
-                markers_common_organs_ext
-            )
-            score = homologs_inverse["found"].sum()
-            matching_markers = homologs_inverse.loc[
-                homologs_inverse["found"], ["queries", "targets", "distances"]
-            ]
-            scores.append(
-                {
-                    "cell_type": ct_target,
-                    "markers": markers_ct_target,
-                    "score": score,
-                    "matching_markers": tuple(matching_markers["queries"]),
-                    "matching_markers_reverse_homologs": tuple(
-                        matching_markers["targets"]
-                    ),
-                }
-            )
+
+        idx = cell_type_candidate_scores["compound"] >= min_candidate_score
+        cell_type_candidate_scores = cell_type_candidate_scores.loc[idx]
+
+        # Add a bunch of metadata to the result
         scores = (
-            pd.DataFrame(scores)
-            .set_index("cell_type")
-            .sort_values("score", ascending=False)
+            cell_type_candidate_scores[["compound"]]
+            .reset_index()
+            .rename(columns={"compound": "score", "cell_type": "cell_type_target"})
         )
-        # Find cell type among candidates with the highest reverse score
-        matching_cell_type = scores["score"].idxmax()
+        scores["source_organism"] = source_organism
+        scores["target_organism"] = target_organism
+        scores["cell_type_source"] = cell_type
+        matching_cell_type = scores.at[scores["score"].idxmax(), "cell_type_target"]
 
         return {
             "best_match": matching_cell_type,
             "candidate_scores": scores,
         }
 
-    # Start from a human cell type
-    result = find_sister_type(
-        source_organism="h_sapiens",
-        cell_type="B",
-        target_organism="m_musculus",
-    )
-
-    # Create bipartite graph of types
-    print("Build bipartite graph")
-    source_organism = "h_sapiens"
-    target_organism = "m_musculus"
-    n_cell_types = 50
-    api = atlasapprox.API()
-    celltypexorgans = api.celltypexorgan(organism=source_organism)
-    source_types = (celltypexorgans > 0).sum(axis=1).nlargest(n_cell_types).index
-    results = []
-    for ct in source_types:
-        print(ct)
+    if False:
+        # Start from a human cell type
         result = find_sister_type(
-            source_organism=source_organism,
-            cell_type=ct,
-            target_organism=target_organism,
+            source_organism="h_sapiens",
+            cell_type="pericyte",
+            target_organism="m_murinus",
         )
-        results.append(result)
 
-    target_types = []
-    edges = []
-    for ct1, result in zip(source_types, results):
-        tmp = result["candidate_scores"]
-        tmp = tmp.loc[tmp["score"] > 1]
-        for j, (ct2, row) in enumerate(tmp.iterrows()):
-            if ct2 not in target_types:
-                target_types.append(ct2)
-            edges.append(
-                {
-                    "source": ct1,
-                    "target": ct2,
-                    "score": row["score"],
-                    "best_match": j == 0,
-                    "weight": 1.0 * row["score"] / tmp.iloc[0]["score"],
-                }
+        result_rev = find_sister_type(
+            source_organism="m_musculus",
+            cell_type=result["best_match"],
+            target_organism="h_sapiens",
+        )
+
+    if True:
+        # Create bipartite graph of types
+        print("Build bipartite graph")
+        source_organism = "h_sapiens"
+        target_organism = "m_musculus"
+        api = atlasapprox.API()
+        # n_cell_types = 30
+        # celltypexorgans = api.celltypexorgan(organism=source_organism)
+        # source_types = (celltypexorgans > 0).sum(axis=1).nlargest(n_cell_types).index
+        source_types = [
+            "T",
+            "NK",
+            "B",
+            "plasma",
+            "macrophage",
+            "monocyte",
+            "neutrophil",
+            # "mast",
+            # "basophil",
+            "dendritic",
+            "plasmacytoid",
+            "basal",
+            "ciliated",
+            "AT2",
+            "urothelial",
+            "epithelial",
+            "alpha",
+            "beta",
+            "PP",
+            "hepatocyte",
+            "fibroblast",
+            "smooth muscle",
+            "pericyte",
+            # "vascular smooth muscle",
+            "venous",
+            "arterial",
+            "capillary",
+            "lymphatic",
+        ]
+        results = []
+        for ct in source_types:
+            print(ct)
+            result = find_sister_type(
+                source_organism=source_organism,
+                cell_type=ct,
+                target_organism=target_organism,
             )
-    edges = pd.DataFrame(edges)
+            results.append(result)
 
-    # Walk the bipartite to get optimal partnerings
-    edges_optimal = []
-    fwd_dic = {key: list(val.values) for key, val in edges.groupby("source").target}
-    while True:
-        found = False
-        for source, targets in fwd_dic.items():
-            if len(targets) == 1:
-                found = True
-                target = targets[0]
-                print("unique", source, target)
-                etmp = edges.groupby("source").get_group(source).iloc[0]
-                edges_optimal.append(
+        target_types = []
+        edges = []
+        for ct1, result in zip(source_types, results):
+            tmp = result["candidate_scores"]
+            tmp = tmp.loc[tmp["score"] > 0.2]
+            for j, (_, row) in enumerate(tmp.iterrows()):
+                ct2 = row["cell_type_target"]
+                if ct2 not in target_types:
+                    target_types.append(ct2)
+                edges.append(
                     {
-                        "source": source,
-                        "target": target,
-                        "best_match": True,
-                        "weight": etmp["weight"],
+                        "source": ct1,
+                        "target": ct2,
+                        "score": row["score"],
+                        "best_match": _ == tmp["score"].idxmax(),
+                        "weight": 1.0 * row["score"] / tmp.iloc[0]["score"],
                     }
                 )
-                fwd_dic.pop(source)
-                # exclude this target for anyone else, it's taken
-                for source2, targets2 in fwd_dic.items():
-                    # FIXME: need a better hack here
-                    if len(targets2) == 1:
-                        continue
-                    if target in targets2:
-                        fwd_dic[source2].remove(target)
-                break
-        if found:
-            continue
-        # end of obvious choices, take the closest matches now
-        for source, targets in fwd_dic.items():
-            found = True
-            target = targets[0]
-            print("closest", source, target)
-            etmp = edges.groupby("source").get_group(source).iloc[0]
-            best_match = etmp["target"] == target
-            edges_optimal.append(
-                {
-                    "source": source,
-                    "target": target,
-                    "best_match": best_match,
-                    "weight": etmp["weight"],
-                }
+        edges = pd.DataFrame(edges)
+
+        edges_best = edges[edges["best_match"]]
+        target_types_best = edges_best["target"].drop_duplicates().values
+
+        super_types = [
+            (
+                "immune",
+                [
+                    "T",
+                    "NK",
+                    "B",
+                    "plasma",
+                    "macrophage",
+                    "alveolar macrophage",
+                    "monocyte",
+                    "neutrophil",
+                    "mast",
+                    "basophil",
+                    "eosinophil",
+                    "plasmacytoid",
+                    "dendritic",
+                ],
+            ),
+            (
+                "epithelial",
+                [
+                    "basal",
+                    "ciliated",
+                    "AT2",
+                    "urothelial",
+                    "epithelial",
+                    "keratinocyte",
+                ],
+            ),
+            (
+                "endocrine",
+                ["beta", "alpha", "PP", "enteroendocrine", "delta", "hepatocyte"],
+            ),
+            ("endothelial", ["capillary", "venous", "arterial", "lymphatic"]),
+            (
+                "mesenchymal",
+                [
+                    "fibroblast",
+                    "smooth muscle",
+                    "vascular smooth muscle",
+                    "mesangial",
+                    "pericyte",
+                ],
+            ),
+            ("other", ["spermatocyte"]),
+        ]
+        dot_supercolord = {
+            "immune": "navy",
+            "epithelial": "tomato",
+            "endocrine": "deeppink",
+            "endothelial": "blueviolet",
+            "mesenchymal": "orange",
+            "other": "gray",
+        }
+        dot_colord = {}
+        for super_type, types in super_types:
+            for ct in types:
+                dot_colord[ct] = dot_supercolord[super_type]
+        colors1 = [dot_colord[x] for x in source_types]
+        colors2 = [dot_colord.get(x, "black") for x in target_types_best]
+        fig, ax = plt.subplots()
+        ax.scatter(
+            [0] * len(source_types), np.arange(len(source_types)), c=colors1, zorder=5
+        )
+        ax.scatter(
+            [1] * len(target_types_best),
+            np.arange(len(target_types_best)),
+            c=colors2,
+            zorder=5,
+        )
+        for i, ct1 in enumerate(source_types):
+            ax.text(-0.1, i, ct1, ha="right", va="center")
+        for i, ct2 in enumerate(target_types_best):
+            ax.text(1.1, i, ct2, ha="left", va="center")
+        for _, edge in edges_best.iterrows():
+            ct1 = edge["source"]
+            ct2 = edge["target"]
+            i1 = list(source_types).index(ct1)
+            i2 = list(target_types_best).index(ct2)
+            lw = 2.0 * edge["weight"]
+            if dot_colord[ct1] == dot_colord.get(ct2, "black"):
+                color = dot_colord[ct1]
+            else:
+                color = "k"
+            if ct1 == ct2:
+                ls = "-"
+            else:
+                ls = "--"
+            ax.plot(
+                [0, 1], [i1, i2], ls=ls, color=color, lw=lw, alpha=min(1.0, lw / 2.0)
             )
-            fwd_dic.pop(source)
-            # exclude this target for anyone else, it's taken
-            for source2, targets2 in fwd_dic.items():
-                if target in targets2:
-                    fwd_dic[source2].remove(target)
-            break
-        if fwd_dic == {}:
-            break
-    edges_optimal = pd.DataFrame(edges_optimal)
-    edges_optimal["order"] = [
-        list(source_types).index(x) for x in edges_optimal["source"]
-    ]
-    edges_optimal = edges_optimal.sort_values("order")
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels([source_organism, target_organism])
+        ax.set_yticks([])
+        ax.set_ylim(max(len(target_types_best), len(source_types)) - 0.5, -0.5)
+        fig.tight_layout()
 
-    target_types_optimal = edges_optimal["target"].drop_duplicates().values
+        plt.ion()
+        plt.show()
 
-    fig, ax = plt.subplots()
-    ax.scatter([0] * len(source_types), np.arange(len(source_types)), color="k")
-    ax.scatter(
-        [1] * len(target_types_optimal), np.arange(len(target_types_optimal)), color="k"
-    )
-    for i, ct1 in enumerate(source_types):
-        ax.text(-0.1, i, ct1, ha="right", va="center")
-    for i, ct2 in enumerate(target_types_optimal):
-        ax.text(1.1, i, ct2, ha="left", va="center")
-    for _, edge in edges_optimal.iterrows():
-        ct1 = edge["source"]
-        ct2 = edge["target"]
-        i1 = list(source_types).index(ct1)
-        i2 = list(target_types_optimal).index(ct2)
-        ls = "-" if edge["best_match"] else "--"
-        lw = 3.0 * edge["weight"]
-        ax.plot([0, 1], [i1, i2], ls=ls, color="k", lw=lw, alpha=min(1.0, lw / 2.0))
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels([source_organism, target_organism])
-    ax.set_yticks([])
-    ax.set_ylim(max(len(target_types_optimal), len(source_types)) - 0.5, -0.5)
-    fig.tight_layout()
-
-    plt.ion()
-    plt.show()
+    if False:
+        # Find remote sister cell types for muscle
+        organisms = [
+            "m_murinus",
+            "x_laevis",
+            "h_sapiens",
+            "d_melanogaster",
+            "m_musculus",
+            "c_gigas",
+            "c_hemisphaerica",
+            "c_intestinalis",
+            "s_pistillata",
+            "a_queenslandica",
+            "c_elegans",
+            "d_rerio",
+            "h_miamia",
+            "i_pulchra",
+            "m_leidyi",
+            "n_vectensis",
+            "p_crozieri",
+            "s_mansoni",
+            "s_mediterranea",
+            "s_lacustris",
+            "t_adhaerens",
+            "s_purpuratus",
+            "p_dumerilii",
+            "h_vulgaris",
+        ]
+        api = atlasapprox.API()
+        results = {}
+        for organism in organisms:
+            for organism2 in organisms:
+                print(organism, organism2)
+                cell_types = api.celltypexorgan(organism=organism).index
+                cell_types_muscle = [
+                    ct for ct in cell_types if "muscle" in ct or "cardiomyo" in ct
+                ]
+                if len(cell_types_muscle) == 0:
+                    continue
+                try:
+                    result = find_sister_type(
+                        source_organism=organism,
+                        target_organism=organism2,
+                        cell_type=cell_types_muscle,
+                    )
+                    results[organism] = result
+                except:
+                    pass
+        results = pd.concat([x["candidate_scores"] for x in results.values()])
