@@ -97,7 +97,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--finetune-epochs",
         type=int,
-        default=10,
+        default=30,
         help="How many epochs of fine tuning (used to find the SATURN-xfer output files)",
     )
     parser.add_argument(
@@ -565,21 +565,23 @@ if __name__ == "__main__":
                 dpi=300,
             )
 
-    if True:
+    if False:
         print("Plot UMAP with one cluster annotated and the guide assigned annotation")
         cell_types_verify = [
             "fat cell",
             "muscle cell",
             "neuron",
+            "epithelial",
             "glial cell",
             "female reproductive system",
             "crystal cell",
+            "stem cell",
             "T1",
             "T2",
             "T3",
             "T4",
         ]
-        fig, axs = plt.subplots(3, 3, figsize=(20, 21), sharex=True, sharey=True)
+        fig, axs = plt.subplots(3, 4, figsize=(24, 21), sharex=True, sharey=True)
         for ax, cell_type in zip(axs.ravel(), cell_types_verify):
             groups = [
                 "znev-inf_" + cell_type,
@@ -632,3 +634,112 @@ if __name__ == "__main__":
                 f"../figures/umap_znev_drosophila_matching_annotations.png",
                 dpi=300,
             )
+
+    if True:
+        print(
+            "Plot evidence of conserved and less conserved cell types between the two species"
+        )
+        # Load homology table
+        termite_homolog_table_fn = (
+            termite_h5ad_fdn.parent / "termite_dmel_gene_orthos_cell_type_transfer.ods"
+        )
+        termite_homolog_table = pd.read_excel(termite_homolog_table_fn, engine="odf")
+
+        # Load original Znev counts and normalize to cptt
+        original_znev_h5ad = termite_h5ad_fdn / "znev_prepared_for_SATURN-xfer.h5ad"
+        adata_znev_orig = anndata.read_h5ad(original_znev_h5ad)
+        sc.pp.normalize_total(adata_znev_orig, target_sum=1e4)
+
+        # Load cptt dmel counts
+        original_dmel_h5ad = (
+            termite_h5ad_fdn.parent.parent / "dmel" / "dmel_cptt_for_znev_figure.h5ad"
+        )
+        adata_dmel_orig = anndata.read_h5ad(original_dmel_h5ad)
+
+        cell_types_verify = [
+            "fat cell",
+            "muscle cell",
+            "neuron",
+            "crystal cell",
+            "T1",
+        ]
+        for cell_type in cell_types_verify:
+            homology_rows = termite_homolog_table.loc[
+                termite_homolog_table["znev_cell_type"] == cell_type
+            ]
+            naxs = 1 + homology_rows.shape[0]
+
+            fig, axs = plt.subplots(
+                1, naxs, figsize=(4 * naxs, 4), sharex=True, sharey=True
+            )
+
+            ax = axs[0]
+            groups = [
+                "znev-inf_" + cell_type,
+                "d_melanogaster_" + annotations.at[cell_type, "annotation"],
+            ]
+            palette = {
+                key: (0.9, 0.9, 0.9, 0.001)
+                for key in adata.obs["labels"].cat.categories
+            }
+            palette["other"] = (0.9, 0.9, 0.9, 0.001)
+            palette[groups[0]] = tuple(list(to_rgba("goldenrod")[:3]) + [0.1])
+            palette[groups[1]] = tuple(list(to_rgba("tomato")[:3]) + [0.1])
+
+            sc.pl.umap(
+                adata,
+                color="labels",
+                ax=ax,
+                add_outline=True,
+                size=35,
+                groups=groups,
+                palette=palette,
+                na_color=palette["other"],
+                legend_loc="lower right",
+                frameon=False,
+                zorder=4,
+            )
+            # Curate legend
+            legend_handles, legend_labels = ax.get_legend_handles_labels()
+            # Remove NA
+            legend_handles = legend_handles[:-1]
+            legend_labels = legend_labels[:-1]
+            # Increase opacity
+            for lh in legend_handles:
+                lh.set_alpha(1.0)
+            ax.legend(
+                legend_handles,
+                legend_labels,
+                loc="best",
+                fontsize=12,
+                frameon=False,
+            )
+            ax.set_title("SATURN-xfer annotation")
+
+            for ax, (_, homology_row) in zip(axs[1:], homology_rows.iterrows()):
+                znev_gene = homology_row["znev_gene_id"]
+                dmel_homolog = homology_row["dmel_gene_symbol"]
+                adata.obs["tmp"] = 0
+                adata.obs.loc[adata_znev_orig.obs_names, "tmp"] = (
+                    adata_znev_orig[:, znev_gene].X.toarray().flatten()
+                )
+                sc.pl.umap(
+                    adata,
+                    color="tmp",
+                    ax=ax,
+                    add_outline=True,
+                    size=35,
+                    cmap="viridis",
+                    title=f"{znev_gene}->{dmel_homolog}",
+                )
+            del adata.obs["tmp"]
+
+            fig.tight_layout()
+            if args.savefig:
+                fig.savefig(
+                    f"../figures/umap_znev_drosophila_with_homologs_{cell_type}.svg",
+                )
+                fig.savefig(
+                    f"../figures/umap_znev_drosophila_with_homologs_{cell_type}.png",
+                    dpi=300,
+                )

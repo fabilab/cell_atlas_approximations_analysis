@@ -97,7 +97,7 @@ if __name__ == "__main__":
         help="Which encoder to use",
     )
     parser.add_argument(
-        "--n-finetune-epochs", default=10, help="Number of epochs in finetuning"
+        "--n-finetune-epochs", default=30, help="Number of epochs in finetuning"
     )
     parser.add_argument(
         "--guide-species",
